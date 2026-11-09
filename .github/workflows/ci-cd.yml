@@ -1,0 +1,170 @@
+name: CI/CD Pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+env:
+  # Configurações do projeto
+  PYTHON_VERSION: '3.15'
+  UV_VERSION: '0.8.14'
+  AWS_REGION: sa-east-1
+  ECR_REPOSITORY: geracaotech/biblioteca
+  # Configuração AWS ECS para deploy automático
+  ECS_CLUSTER: biblioteca-cluster
+  ECS_SERVICE: biblioteca-service
+  # Configuração PostgreSQL para testes
+  POSTGRES_USER: biblioteca_user
+  POSTGRES_DB: biblioteca_test
+  DATABASE_HOST: localhost
+  DATABASE_PORT: 5432
+
+jobs:
+  lint:
+    name: Lint with Flake8
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install flake8
+        run: uv pip install --system flake8
+
+      - name: Run flake8
+        run: flake8 . --count --show-source --statistics
+
+  test:
+    name: Run Django Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run migrations
+        env:
+          DATABASE_NAME: ${{ env.POSTGRES_DB }}
+          DATABASE_USER: ${{ env.POSTGRES_USER }}
+          DATABASE_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          DATABASE_HOST: ${{ env.DATABASE_HOST }}
+          DATABASE_PORT: ${{ env.DATABASE_PORT }}
+          SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          DEBUG: 'False'
+        run: uv run python manage.py migrate
+
+      - name: Run tests
+        env:
+          DATABASE_NAME: ${{ env.POSTGRES_DB }}
+          DATABASE_USER: ${{ env.POSTGRES_USER }}
+          DATABASE_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          DATABASE_HOST: ${{ env.DATABASE_HOST }}
+          DATABASE_PORT: ${{ env.DATABASE_PORT }}
+          SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          DEBUG: 'False'
+        run: uv run python manage.py test
+
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=ref,event=pr
+            type=sha,prefix=pr-${{ github.event.pull_request.number }}-,enable=${{ github.event_name == 'pull_request' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+            type=sha,format=long,enable=${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output image details
+        run: |
+          echo "Image tags:"
+          echo "${{ steps.meta.outputs.tags }}"
+
+      # Deploy no Amazon ECS (executa quando houver push na branch main)
+      - name: Deploy to Amazon ECS
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          echo "Verificando se o serviço ECS '${{ env.ECS_SERVICE }}' existe no cluster '${{ env.ECS_CLUSTER }}'..."
+          STATUS=$(aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --region ${{ env.AWS_REGION }} --query 'services[0].status' --output text 2>/dev/null || echo "MISSING")
+          if [ "$STATUS" = "ACTIVE" ]; then
+            echo "Serviço ativo encontrado! Atualizando serviço e disparando novo deployment..."
+            aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --region ${{ env.AWS_REGION }} --force-new-deployment
+          else
+            echo "Serviço ECS '${{ env.ECS_SERVICE }}' ou Cluster '${{ env.ECS_CLUSTER }}' ainda não existem na AWS."
+            echo "A imagem foi enviada com sucesso para o ECR e estará disponível assim que o serviço ECS for criado!"
+          fi
