@@ -29,3 +29,14 @@ RUN --mount=type=cache,target=/root/.cache \
 
 # copy project
 COPY . .
+
+# copy entrypoint
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# expose port
+EXPOSE 8000
+
+# set entrypoint and default command
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["uv", "run", "python", "manage.py", "runserver", "0.0.0.0:8000"]
