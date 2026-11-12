@@ -35,7 +35,11 @@ SECRET_KEY = os.environ.get(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if host.strip()
+]
 
 
 # Application definition
@@ -48,9 +52,16 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'ninja',
+    'ninja_simple_jwt',
     'api',
 ]
 
+NINJA_SIMPLE_JWT = {
+    "USE_STATELESS_AUTH": False,
+    "JWT_ALGORITHM": "HS256",
+    "JWT_PRIVATE_KEY": os.environ.get("JWT_SECRET_KEY", "sua-chave-secreta-simples"),
+    "JWT_PUBLIC_KEY": os.environ.get("JWT_SECRET_KEY", "sua-chave-secreta-simples"),
+}
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',

@@ -1,7 +1,15 @@
 from django.db import connection
 from django.db.utils import OperationalError
-from ninja import NinjaAPI, Schema
+from ninja import NinjaAPI
 
+
+from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
+
+from ninja.errors import HttpError
+from biblioteca.schemas import UserCreateSchema, UserOutSchema, HealthCheckResponse
+
+User = get_user_model()
 api = NinjaAPI(
     title="Biblioteca API",
     version="1.0.0",
@@ -9,10 +17,20 @@ api = NinjaAPI(
 )
 
 
-class HealthCheckResponse(Schema):
-    status: str
-    database: str
-    version: str
+@api.post("/auth/register", response={201: UserOutSchema}, auth=None)
+def register(request, payload: UserCreateSchema):
+    if payload.email and User.objects.filter(email=payload.email).exists():
+        raise HttpError(400, "Nome de usuário ou e-mail já está em uso.")
+    try:
+        with transaction.atomic():
+            user = User.objects.create_user(
+                username=payload.username,
+                email=payload.email,
+                password=payload.password,
+            )
+            return 201, user
+    except IntegrityError:
+        raise HttpError(400, "Nome de usuário ou e-mail já está em uso.")
 
 
 @api.get("/health", response=HealthCheckResponse, tags=["Health"])
