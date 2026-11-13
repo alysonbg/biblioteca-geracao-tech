@@ -39,4 +39,4 @@ EXPOSE 8000
 
 # set entrypoint and default command
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["uv", "run", "python", "manage.py", "runserver", "0.0.0.0:8000"]
+CMD ["uv", "run", "gunicorn", "biblioteca.wsgi:application", "--config", "gunicorn_config.py"]
