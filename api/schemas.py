@@ -36,3 +36,18 @@ class RentOutSchema(Schema):
     @staticmethod
     def resolve_book_title(obj) -> str:
         return obj.physical_book.book.title
+
+
+class AvailableBookSchema(Schema):
+    id: int
+    title: str
+    author_name: str
+    available_copies: int
+
+    @staticmethod
+    def resolve_author_name(obj) -> str:
+        return obj.author.name
+
+    @staticmethod
+    def resolve_available_copies(obj) -> int:
+        return len(obj.available_copies_list)
