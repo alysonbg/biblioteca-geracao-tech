@@ -542,3 +542,149 @@ class RentAPITestCase(TestCase):
 
         self.physical_book.refresh_from_db()
         self.assertEqual(self.physical_book.status, PhysicalBook.Status.AVAILABLE)
+
+    def test_disallowed_methods(self):
+        """Testa métodos HTTP não permitidos no endpoint /api/rents/."""
+        for method in [self.client.put, self.client.delete, self.client.patch]:
+            with self.subTest(method=method.__name__):
+                response = method(self.rents_url, **self.auth_headers)
+                self.assertEqual(response.status_code, 405)
+
+
+class AvailableBooksAPITestCase(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_user(
+            username="leitor_disponivel",
+            email="leitor_disponivel@teste.com",
+            password="senhaSegura123!",
+        )
+        token, _ = get_access_token_for_user(self.user)
+        self.auth_headers = {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+        self.url = "/api/books/available/"
+
+        self.author = Author.objects.create(name="Guimarães Rosa")
+        self.book_available = Book.objects.create(
+            title="Grande Sertão: Veredas",
+            author=self.author,
+        )
+        self.book_all_loaned = Book.objects.create(
+            title="Sagarana",
+            author=self.author,
+        )
+        self.book_no_copies = Book.objects.create(
+            title="Primeiras Estórias",
+            author=self.author,
+        )
+
+        # book_available: 2 exemplares disponíveis, 1 emprestado
+        self.pb_available_1 = PhysicalBook.objects.create(
+            book=self.book_available, status=PhysicalBook.Status.AVAILABLE
+        )
+        self.pb_available_2 = PhysicalBook.objects.create(
+            book=self.book_available, status=PhysicalBook.Status.AVAILABLE
+        )
+        PhysicalBook.objects.create(
+            book=self.book_available, status=PhysicalBook.Status.LOANED
+        )
+
+        # book_all_loaned: apenas exemplares indisponíveis
+        PhysicalBook.objects.create(
+            book=self.book_all_loaned, status=PhysicalBook.Status.LOANED
+        )
+        PhysicalBook.objects.create(
+            book=self.book_all_loaned, status=PhysicalBook.Status.MAINTENANCE
+        )
+
+        # book_no_copies: sem exemplares cadastrados
+
+    def test_list_available_books_happy_path(self):
+        """Testa listagem retornando apenas livros com exemplares disponíveis."""
+        response = self.client.get(self.url, **self.auth_headers)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        ids = [b["id"] for b in data]
+        self.assertIn(self.book_available.id, ids)
+        self.assertNotIn(self.book_all_loaned.id, ids)
+        self.assertNotIn(self.book_no_copies.id, ids)
+
+    def test_list_available_books_response_structure(self):
+        """Testa a estrutura dos campos retornados pelo endpoint."""
+        response = self.client.get(self.url, **self.auth_headers)
+        self.assertEqual(response.status_code, 200)
+
+        book_data = next(
+            b for b in response.json() if b["id"] == self.book_available.id
+        )
+        self.assertIn("id", book_data)
+        self.assertIn("title", book_data)
+        self.assertIn("author_name", book_data)
+        self.assertIn("available_copies", book_data)
+        self.assertEqual(book_data["title"], self.book_available.title)
+        self.assertEqual(book_data["author_name"], self.author.name)
+
+    def test_list_available_books_copies_count(self):
+        """Testa se a contagem de cópias disponíveis está correta."""
+        response = self.client.get(self.url, **self.auth_headers)
+        self.assertEqual(response.status_code, 200)
+
+        book_data = next(
+            b for b in response.json() if b["id"] == self.book_available.id
+        )
+        self.assertEqual(book_data["available_copies"], 2)
+
+    def test_list_available_books_updates_after_rent(self):
+        """Testa que a contagem diminui após um aluguel."""
+        RentService.rent_book(user=self.user, physical_book_id=self.pb_available_1.id)
+
+        response = self.client.get(self.url, **self.auth_headers)
+        self.assertEqual(response.status_code, 200)
+
+        book_data = next(
+            b for b in response.json() if b["id"] == self.book_available.id
+        )
+        self.assertEqual(book_data["available_copies"], 1)
+
+    def test_list_available_books_disappears_when_all_rented(self):
+        """Testa que o livro some da lista quando todos exemplares são alugados."""
+        RentService.rent_book(user=self.user, physical_book_id=self.pb_available_1.id)
+        other_user = User.objects.create_user(
+            username="outro_leitor",
+            email="outro_leitor@teste.com",
+            password="senhaSegura123!",
+        )
+        RentService.rent_book(user=other_user, physical_book_id=self.pb_available_2.id)
+
+        response = self.client.get(self.url, **self.auth_headers)
+        self.assertEqual(response.status_code, 200)
+
+        ids = [b["id"] for b in response.json()]
+        self.assertNotIn(self.book_available.id, ids)
+
+    def test_list_available_books_unauthenticated(self):
+        """Testa rejeição 401 para requisições sem autenticação."""
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 401)
+
+    def test_list_available_books_invalid_token(self):
+        """Testa rejeição 401 com token JWT inválido."""
+        response = self.client.get(
+            self.url, HTTP_AUTHORIZATION="Bearer token_invalido"
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_list_available_books_empty_when_none_available(self):
+        """Testa retorno de lista vazia quando não há exemplares disponíveis."""
+        # Empresta os 2 disponíveis
+        other = User.objects.create_user(
+            username="outro2", email="outro2@teste.com", password="senha123"
+        )
+        RentService.rent_book(user=self.user, physical_book_id=self.pb_available_1.id)
+        RentService.rent_book(user=other, physical_book_id=self.pb_available_2.id)
+
+        response = self.client.get(self.url, **self.auth_headers)
+        self.assertEqual(response.status_code, 200)
+        ids = [b["id"] for b in response.json()]
+        self.assertNotIn(self.book_available.id, ids)

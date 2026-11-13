@@ -1,14 +1,43 @@
+from django.db.models import Prefetch
 from ninja import Router
 from ninja.errors import HttpError
 from ninja.security import django_auth
 from ninja_simple_jwt.auth.ninja_auth import HttpJwtAuth
 
-from api.models import Rent
-from api.schemas import RentCreateSchema, RentOutSchema
+from api.models import Book, PhysicalBook, Rent
+from api.schemas import AvailableBookSchema, RentCreateSchema, RentOutSchema
 from api.services import RentService
 
 library_router = Router(tags=["Empréstimos"])
 router = library_router  # alias para conveniência
+
+
+@library_router.get(
+    "/books/available/",
+    response=list[AvailableBookSchema],
+    auth=[HttpJwtAuth(), django_auth],
+    summary="Lista livros disponíveis para aluguel",
+    description=(
+        "Retorna todos os livros que possuem ao menos um exemplar físico "
+        "com status 'available', incluindo a contagem de cópias disponíveis."
+    ),
+)
+def list_available_books(request):
+    """Lista livros com exemplares físicos disponíveis para empréstimo."""
+    available_copies_prefetch = Prefetch(
+        "physical_books",
+        queryset=PhysicalBook.objects.filter(status=PhysicalBook.Status.AVAILABLE),
+        to_attr="available_copies_list",
+    )
+
+    books = (
+        Book.objects.filter(physical_books__status=PhysicalBook.Status.AVAILABLE)
+        .distinct()
+        .select_related("author")
+        .prefetch_related(available_copies_prefetch)
+    )
+
+    return list(books)
 
 
 @library_router.post(
