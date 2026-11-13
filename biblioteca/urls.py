@@ -19,8 +19,10 @@ from django.urls import path
 from biblioteca.api import api
 
 from ninja_simple_jwt.auth.views.api import web_auth_router
+from api.library_router import library_router
 
 api.add_router("/auth/web/", web_auth_router)
+api.add_router("", library_router)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
