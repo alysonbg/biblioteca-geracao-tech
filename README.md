@@ -13,6 +13,15 @@ Sistema de gerenciamento de biblioteca desenvolvido com Django.
 - Gunicorn (WSGI Server)
 - Docker & Podman
 
+## 📚 Documentação da API
+
+A documentação interativa da API (OpenAPI/Swagger) está disponível em:
+
+- **Swagger UI**: [http://localhost:8000/api/docs](http://localhost:8000/api/docs)
+- **Schema OpenAPI JSON**: [http://localhost:8000/api/openapi.json](http://localhost:8000/api/openapi.json)
+
+A documentação é gerada automaticamente através do Django Ninja e permite testar todos os endpoints diretamente no navegador.
+
 ## 📦 Servidor de Aplicação
 
 O projeto utiliza **Gunicorn** como servidor WSGI para produção. O Gunicorn oferece:
@@ -82,3 +91,10 @@ Execute o Flake8:
 ```bash
 uv run flake8
 ```
+
+## 📖 Documentação Arquitetural
+
+As decisões arquiteturais do projeto estão documentadas em ADRs (Architecture Decision Records):
+
+- [ADR 001: Escolha do Django como Framework Principal](docs/adr/001-escolha-django-framework.md)
+- [ADR 002: Escolha do Django Ninja para Desenvolvimento da API](docs/adr/002-escolha-django-ninja-api.md)
